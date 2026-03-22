@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { 
   onAuthStateChanged, 
-  signInWithPopup, 
-  GoogleAuthProvider, 
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
   signOut, 
   User 
 } from 'firebase/auth';
@@ -109,14 +109,86 @@ export default function App() {
     };
   }, [user]);
 
-  const login = async () => {
-    const provider = new GoogleAuthProvider();
+  const loginWithStrava = async () => {
+    const width = 600;
+    const height = 700;
+    const popup = window.open('about:blank', 'strava_oauth', `width=${width},height=${height}`);
+
+    if (!popup) {
+      alert("Popup blocked. Please allow popups for this site.");
+      return;
+    }
+
     try {
-      await signInWithPopup(auth, provider);
-    } catch (error) {
-      console.error("Login error:", error);
+      const response = await fetch('/api/auth/strava/url');
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to get auth URL');
+      popup.location.href = data.url;
+    } catch (err: any) {
+      console.error("Strava connection error:", err);
+      alert(err.message || "Failed to connect to Strava. Please try again.");
+      if (popup) popup.close();
     }
   };
+
+  useEffect(() => {
+    const handleMessage = async (event: MessageEvent) => {
+      if (event.data?.type === 'STRAVA_AUTH_SUCCESS') {
+        const { access_token, refresh_token, expires_at, athleteId } = event.data.data;
+        
+        // Use Strava athlete ID to create a deterministic Firebase user
+        const email = `athlete_${athleteId}@strava.local`;
+        const password = `strava_${athleteId}_secret_password`;
+
+        try {
+          // Try to sign in
+          await signInWithEmailAndPassword(auth, email, password);
+        } catch (error: any) {
+          if (error.code === 'auth/user-not-found' || error.code === 'auth/invalid-credential') {
+            // If user doesn't exist, create them
+            try {
+              await createUserWithEmailAndPassword(auth, email, password);
+            } catch (createError: any) {
+              console.error("Failed to create Firebase user:", createError);
+              alert("Authentication failed. Please ensure Email/Password auth is enabled in Firebase Console.");
+              return;
+            }
+          } else {
+            console.error("Firebase Auth Error:", error);
+            alert("Authentication failed.");
+            return;
+          }
+        }
+
+        // Once signed in, the onAuthStateChanged listener will trigger.
+        // We need to wait for the user to be set, then update their profile with Strava tokens.
+        // Since onAuthStateChanged is asynchronous, we can just update the document directly using the athleteId as part of the email.
+        
+        // Wait a brief moment for auth state to settle
+        setTimeout(async () => {
+          if (auth.currentUser) {
+             const updatedProfile = {
+               uid: auth.currentUser.uid,
+               stravaAccessToken: access_token,
+               stravaRefreshToken: refresh_token,
+               stravaTokenExpiresAt: expires_at,
+               stravaAthleteId: athleteId.toString(),
+               displayName: `Athlete ${athleteId}`,
+               email: email,
+               fitnessLevel: 'beginner',
+               goals: ''
+             };
+             await setDoc(doc(db, 'users', auth.currentUser.uid), updatedProfile, { merge: true });
+             setProfile(updatedProfile as UserProfile);
+             syncStravaActivities(updatedProfile as UserProfile);
+          }
+        }, 1000);
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
 
   const logout = () => signOut(auth);
 
@@ -384,12 +456,15 @@ export default function App() {
           <h1 className="text-3xl font-bold text-zinc-900 mb-2">Veloce AI</h1>
           <p className="text-zinc-500 mb-8">Your AI-powered athletic journey starts here. Sync with Strava, get personalized plans, and conquer your goals.</p>
           <button
-            onClick={login}
-            className="w-full bg-zinc-900 hover:bg-zinc-800 text-white font-bold py-4 rounded-2xl transition-all shadow-lg flex items-center justify-center gap-3"
+            onClick={loginWithStrava}
+            className="w-full bg-[#FC6100] hover:bg-[#E35700] text-white font-bold py-4 rounded-2xl transition-all shadow-lg flex items-center justify-center gap-3"
           >
-            <img src="https://www.google.com/favicon.ico" className="w-5 h-5" alt="Google" />
-            Continue with Google
+            <ActivityIcon className="w-5 h-5" />
+            Connect with Strava
           </button>
+          <p className="mt-4 text-xs text-zinc-400">
+            Note: Requires Email/Password authentication to be enabled in your Firebase Console.
+          </p>
         </div>
       </div>
     );
