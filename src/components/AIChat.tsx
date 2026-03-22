@@ -3,15 +3,17 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { UserProfile, Activity, TrainingPlan, CalendarEvent, ChatMessage } from '../types';
 import { Send, Loader2, Bot, User, Sparkles, Calendar as CalendarIcon, RefreshCw } from 'lucide-react';
 import Markdown from 'react-markdown';
+import { getMockAIResponse, MOCK_NEW_PLAN, MOCK_NEW_EVENTS } from '../mockData';
 
 interface AIChatProps {
   userProfile: UserProfile | null;
   activities: Activity[];
   currentPlan: TrainingPlan | null;
   onPlanGenerated: (plan: TrainingPlan, events: CalendarEvent[]) => void;
+  isDemoMode?: boolean;
 }
 
-export default function AIChat({ userProfile, activities, currentPlan, onPlanGenerated }: AIChatProps) {
+export default function AIChat({ userProfile, activities, currentPlan, onPlanGenerated, isDemoMode }: AIChatProps) {
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     const saved = localStorage.getItem('veloce_chat_history');
     return saved ? JSON.parse(saved) : [
@@ -74,6 +76,21 @@ export default function AIChat({ userProfile, activities, currentPlan, onPlanGen
     setMessages(prev => [...prev, { role: 'user', text: userMessage }]);
     setIsLoading(true);
 
+    if (isDemoMode) {
+      setTimeout(() => {
+        const mockText = getMockAIResponse(userMessage);
+        
+        // Trigger plan generation state if relevant
+        if (userMessage.toLowerCase().includes('plan') || userMessage.toLowerCase().includes('replace')) {
+          setPendingPlan({ plan: MOCK_NEW_PLAN, events: MOCK_NEW_EVENTS });
+        }
+
+        setMessages(prev => [...prev, { role: 'model', text: mockText }]);
+        setIsLoading(false);
+      }, 1000);
+      return;
+    }
+
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
       
@@ -108,7 +125,7 @@ export default function AIChat({ userProfile, activities, currentPlan, onPlanGen
       `;
 
       const response = await ai.models.generateContent({
-        model: "gemini-2.0-flash",
+        model: "gemini-1.5-flash-latest",
         contents: [
           { role: 'user', parts: [{ text: `Context: ${context}\n\nUser: ${userMessage}` }] }
         ],
@@ -176,60 +193,62 @@ export default function AIChat({ userProfile, activities, currentPlan, onPlanGen
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-8rem)] bg-white rounded-3xl border border-zinc-200 shadow-sm overflow-hidden">
+    <div className="flex flex-col h-[calc(100vh-10rem)] bg-[#1F1F1F] rounded-[2rem] border border-white/5 shadow-2xl overflow-hidden animate-kaizen">
       {/* Chat Header */}
-      <div className="p-6 border-b border-zinc-100 bg-zinc-50/50 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-emerald-500 rounded-xl flex items-center justify-center shadow-lg shadow-emerald-200">
-            <Bot className="w-6 h-6 text-white" />
+      <div className="p-8 border-b border-white/5 bg-white/5 flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <div className="w-12 h-12 bg-[#FC4C02] rounded-2xl flex items-center justify-center shadow-2xl shadow-orange-500/20">
+            <Bot className="w-7 h-7 text-white" />
           </div>
           <div>
-            <h2 className="font-bold text-zinc-900">Veloce AI Coach</h2>
-            <p className="text-xs text-zinc-500 flex items-center gap-1">
-              <Sparkles className="w-3 h-3 text-emerald-500" />
-              Powered by Gemini
+            <h2 className="text-xl font-black tracking-tighter text-white uppercase">COACH PROTOCOL</h2>
+            <p className="text-xs text-zinc-500 flex items-center gap-1 font-bold uppercase tracking-widest">
+              <Sparkles className="w-3 h-3 text-[#FC4C02]" />
+              AI ACTIVE
             </p>
           </div>
         </div>
         <button 
           onClick={clearChat}
-          className="text-xs font-bold text-zinc-400 hover:text-rose-500 transition-colors flex items-center gap-1"
+          className="text-xs font-black text-zinc-500 hover:text-[#FC4C02] transition-colors flex items-center gap-2 uppercase tracking-widest"
         >
           <RefreshCw className="w-3 h-3" />
-          Clear Chat
+          Reset Session
         </button>
       </div>
 
       {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+      <div className="flex-1 overflow-y-auto p-8 space-y-8 scroll-smooth">
         {messages.map((msg, i) => (
           <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`flex gap-3 max-w-[80%] ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
-              <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                msg.role === 'user' ? 'bg-zinc-100' : 'bg-emerald-100'
+            <div className={`flex gap-4 max-w-[85%] ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
+              <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 shadow-lg ${
+                msg.role === 'user' ? 'bg-[#FC4C02]' : 'bg-white/10'
               }`}>
-                {msg.role === 'user' ? <User className="w-5 h-5 text-zinc-600" /> : <Bot className="w-5 h-5 text-emerald-600" />}
+                {msg.role === 'user' ? <User className="w-6 h-6 text-white" /> : <Bot className="w-6 h-6 text-[#FC4C02]" />}
               </div>
-              <div className={`p-4 rounded-2xl ${
-                msg.role === 'user' ? 'bg-zinc-900 text-white rounded-tr-none' : 'bg-zinc-50 text-zinc-800 rounded-tl-none border border-zinc-100'
+              <div className={`p-6 rounded-[1.5rem] shadow-xl ${
+                msg.role === 'user' 
+                  ? 'bg-[#FC4C02] text-white rounded-tr-none shadow-orange-500/10' 
+                  : 'bg-[#121212] text-zinc-200 rounded-tl-none border border-white/5'
               }`}>
-                <div className="prose prose-sm max-w-none prose-zinc dark:prose-invert">
+                <div className={`prose prose-sm max-w-none ${msg.role === 'user' ? 'prose-invert' : 'prose-invert italic font-medium'}`}>
                   <Markdown>{msg.text}</Markdown>
                 </div>
                 {msg.role === 'model' && pendingPlan && i === messages.length - 1 && (
-                  <div className="mt-4 flex gap-2">
+                  <div className="mt-6 flex flex-wrap gap-3">
                     <button 
                       onClick={confirmPlan}
-                      className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-xl text-sm font-bold transition-all flex items-center gap-2"
+                      className="strava-btn-primary px-5 py-3 text-sm"
                     >
                       <RefreshCw className="w-4 h-4" />
-                      Replace Current Plan
+                      ACTIVATE PROTOCOL
                     </button>
                     <button 
                       onClick={() => setPendingPlan(null)}
-                      className="bg-zinc-200 hover:bg-zinc-300 text-zinc-700 px-4 py-2 rounded-xl text-sm font-bold transition-all"
+                      className="strava-btn-secondary px-5 py-3 text-sm"
                     >
-                      Ignore
+                      IGNORE
                     </button>
                   </div>
                 )}
@@ -239,12 +258,12 @@ export default function AIChat({ userProfile, activities, currentPlan, onPlanGen
         ))}
         {isLoading && (
           <div className="flex justify-start">
-            <div className="flex gap-3">
-              <div className="w-8 h-8 rounded-lg bg-emerald-100 flex items-center justify-center">
-                <Bot className="w-5 h-5 text-emerald-600" />
+            <div className="flex gap-4 animate-pulse">
+              <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center shadow-lg">
+                <Bot className="w-6 h-6 text-[#FC4C02]" />
               </div>
-              <div className="bg-zinc-50 p-4 rounded-2xl rounded-tl-none border border-zinc-100">
-                <Loader2 className="w-5 h-5 text-emerald-500 animate-spin" />
+              <div className="bg-[#121212] p-6 rounded-[1.5rem] rounded-tl-none border border-white/5">
+                <Loader2 className="w-6 h-6 text-[#FC4C02] animate-spin" />
               </div>
             </div>
           </div>
@@ -253,22 +272,22 @@ export default function AIChat({ userProfile, activities, currentPlan, onPlanGen
       </div>
 
       {/* Input Area */}
-      <div className="p-6 border-t border-zinc-100 bg-zinc-50/50">
-        <div className="relative">
+      <div className="p-8 border-t border-white/5 bg-white/5">
+        <div className="relative group/input">
           <input
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-            placeholder="Ask your coach anything..."
-            className="w-full bg-white border border-zinc-200 rounded-2xl pl-6 pr-14 py-4 focus:ring-2 focus:ring-emerald-500 outline-none transition-all shadow-sm"
+            placeholder="Command your coach..."
+            className="w-full bg-[#121212] border border-white/10 rounded-2xl pl-8 pr-16 py-5 focus:ring-2 focus:ring-[#FC4C02] outline-none transition-all shadow-2xl text-white font-bold placeholder:text-zinc-600"
           />
           <button
             onClick={handleSend}
             disabled={!input.trim() || isLoading}
-            className="absolute right-2 top-2 bottom-2 bg-zinc-900 hover:bg-zinc-800 disabled:opacity-50 text-white px-4 rounded-xl transition-all"
+            className="absolute right-3 top-3 bottom-3 bg-[#FC4C02] hover:bg-[#E34402] disabled:opacity-30 text-white px-5 rounded-xl transition-all shadow-lg shadow-orange-500/20 active:scale-95 group-hover/input:scale-105"
           >
-            <Send className="w-5 h-5" />
+            <Send className="w-6 h-6" />
           </button>
         </div>
       </div>

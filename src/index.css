@@ -1,1 +1,64 @@
 @import "tailwindcss";
+
+@theme {
+  --color-strava-orange: #FC4C02;
+  --color-strava-black: #121212;
+  --color-strava-dark: #1F1F1F;
+  --color-strava-gray: #2D2D2D;
+  --color-strava-light: #E6E6E6;
+  
+  --font-inter: "Inter", sans-serif;
+}
+
+:root {
+  --strava-orange: #FC4C02;
+  --strava-black: #121212;
+  --kaizen-glass: rgba(255, 255, 255, 0.03);
+  --kaizen-border: rgba(255, 255, 255, 0.08);
+}
+
+body {
+  @apply bg-[#121212] text-white font-inter antialiased;
+  background-image: 
+    radial-gradient(at 0% 0%, rgba(252, 76, 2, 0.05) 0px, transparent 50%),
+    radial-gradient(at 100% 100%, rgba(252, 76, 2, 0.03) 0px, transparent 50%);
+  min-height: 100vh;
+}
+
+/* Glassmorphism Utilities */
+.glass-panel {
+  @apply bg-white/5 backdrop-blur-xl border border-white/10 shadow-2xl;
+}
+
+.kaizen-card {
+  @apply bg-[#1F1F1F] border border-white/5 rounded-2xl shadow-sm transition-all duration-300 hover:border-white/20 hover:shadow-xl hover:-translate-y-1;
+}
+
+.strava-btn-primary {
+  @apply bg-[#FC4C02] hover:bg-[#E34402] text-white font-bold py-3 px-6 rounded-xl transition-all duration-200 active:scale-95 shadow-lg shadow-orange-500/20 flex items-center justify-center gap-2;
+}
+
+.strava-btn-secondary {
+  @apply bg-white/5 hover:bg-white/10 text-white font-bold py-3 px-6 rounded-xl transition-all duration-200 border border-white/10 flex items-center justify-center gap-2;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-white/10 rounded-full hover:bg-white/20 transition-colors;
+}
+
+/* Animations */
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-kaizen {
+  animation: slideUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}

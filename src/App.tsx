@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { 
   onAuthStateChanged, 
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
+  signInAnonymously,
   signOut, 
   User 
 } from 'firebase/auth';
@@ -38,10 +37,12 @@ import {
   ChevronRight,
   Plus,
   AlertCircle,
-  CheckCircle2
+  CheckCircle2,
+  Sparkles
 } from 'lucide-react';
 import axios from 'axios';
 import { format } from 'date-fns';
+import { MOCK_USER, MOCK_ACTIVITIES, MOCK_PLAN, MOCK_EVENTS } from './mockData';
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -55,10 +56,23 @@ export default function App() {
   const [syncError, setSyncError] = useState<string | null>(null);
   const [stravaConfig, setStravaConfig] = useState<{ isConfigured: boolean; missing: string[] } | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isDemoMode, setIsDemoMode] = useState(() => {
+    return localStorage.getItem('veloce_demo_mode') === 'true';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('veloce_demo_mode', isDemoMode.toString());
+  }, [isDemoMode]);
 
   // Auth State
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      if (isDemoMode) {
+        setUser({ uid: MOCK_USER.uid } as User);
+        setProfile(MOCK_USER);
+        setLoading(false);
+        return;
+      }
       setUser(currentUser);
       if (currentUser) {
         const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
@@ -81,10 +95,16 @@ export default function App() {
       setLoading(false);
     });
     return () => unsubscribe();
-  }, []);
+  }, [isDemoMode]);
 
   // Firestore Listeners
   useEffect(() => {
+    if (isDemoMode) {
+      setActivities(MOCK_ACTIVITIES);
+      setPlans([MOCK_PLAN]);
+      setEvents(MOCK_EVENTS);
+      return;
+    }
     if (!user) return;
 
     const qActivities = query(collection(db, 'activities'), where('userId', '==', user.uid));
@@ -107,82 +127,67 @@ export default function App() {
       unsubscribePlans();
       unsubscribeEvents();
     };
-  }, [user]);
+  }, [user, isDemoMode]);
 
   const loginWithStrava = async () => {
-    const width = 600;
-    const height = 700;
-    const popup = window.open('about:blank', 'strava_oauth', `width=${width},height=${height}`);
-
+    const width = 600, height = 700;
+    const left = window.screenX + (window.outerWidth - width) / 2;
+    const top = window.screenY + (window.outerHeight - height) / 2;
+    const popup = window.open(
+      'about:blank',
+      'strava_oauth',
+      `width=${width},height=${height},left=${left},top=${top}`
+    );
     if (!popup) {
-      alert("Popup blocked. Please allow popups for this site.");
+      alert("Popup blocked — please allow popups for this site.");
       return;
     }
-
     try {
       const response = await fetch('/api/auth/strava/url');
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Failed to get auth URL');
       popup.location.href = data.url;
     } catch (err: any) {
-      console.error("Strava connection error:", err);
-      alert(err.message || "Failed to connect to Strava. Please try again.");
-      if (popup) popup.close();
+      popup.close();
+      alert(err.message || "Failed to start Strava connection.");
     }
   };
 
   useEffect(() => {
     const handleMessage = async (event: MessageEvent) => {
-      if (event.data?.type === 'STRAVA_AUTH_SUCCESS') {
-        const { access_token, refresh_token, expires_at, athleteId } = event.data.data;
-        
-        // Use Strava athlete ID to create a deterministic Firebase user
-        const email = `athlete_${athleteId}@strava.local`;
-        const password = `strava_${athleteId}_secret_password`;
+      // Only accept messages from our own origin — security check
+      if (event.origin !== window.location.origin) return;
+      if (event.data?.type !== 'STRAVA_AUTH_COMPLETE') return;
 
-        try {
-          // Try to sign in
-          await signInWithEmailAndPassword(auth, email, password);
-        } catch (error: any) {
-          if (error.code === 'auth/user-not-found' || error.code === 'auth/invalid-credential') {
-            // If user doesn't exist, create them
-            try {
-              await createUserWithEmailAndPassword(auth, email, password);
-            } catch (createError: any) {
-              console.error("Failed to create Firebase user:", createError);
-              alert("Authentication failed. Please ensure Email/Password auth is enabled in Firebase Console.");
-              return;
-            }
-          } else {
-            console.error("Firebase Auth Error:", error);
-            alert("Authentication failed.");
-            return;
-          }
-        }
+      try {
+        // Fetch tokens from the server session (stored during OAuth callback)
+        const res = await fetch('/api/auth/strava/session');
+        if (!res.ok) throw new Error('Session not found — please try connecting again.');
+        const { access_token, refresh_token, expires_at, athleteId } = await res.json();
 
-        // Once signed in, the onAuthStateChanged listener will trigger.
-        // We need to wait for the user to be set, then update their profile with Strava tokens.
-        // Since onAuthStateChanged is asynchronous, we can just update the document directly using the athleteId as part of the email.
-        
-        // Wait a brief moment for auth state to settle
+        await signInAnonymously(auth);
+
         setTimeout(async () => {
           if (auth.currentUser) {
-             const updatedProfile = {
-               uid: auth.currentUser.uid,
-               stravaAccessToken: access_token,
-               stravaRefreshToken: refresh_token,
-               stravaTokenExpiresAt: expires_at,
-               stravaAthleteId: athleteId.toString(),
-               displayName: `Athlete ${athleteId}`,
-               email: email,
-               fitnessLevel: 'beginner',
-               goals: ''
-             };
-             await setDoc(doc(db, 'users', auth.currentUser.uid), updatedProfile, { merge: true });
-             setProfile(updatedProfile as UserProfile);
-             syncStravaActivities(updatedProfile as UserProfile);
+            const updatedProfile: UserProfile = {
+              uid: auth.currentUser.uid,
+              displayName: `Athlete ${athleteId}`,
+              email: `athlete_${athleteId}@strava.local`,
+              stravaAccessToken: access_token,
+              stravaRefreshToken: refresh_token,
+              stravaTokenExpiresAt: expires_at,
+              stravaAthleteId: athleteId.toString(),
+              fitnessLevel: 'beginner',
+              goals: ''
+            };
+            await setDoc(doc(db, 'users', auth.currentUser.uid), updatedProfile, { merge: true });
+            setProfile(updatedProfile);
+            syncStravaActivities(updatedProfile);
           }
-        }, 1000);
+        }, 800);
+      } catch (err: any) {
+        console.error("[Strava] Post-auth error:", err);
+        alert(err.message || "Authentication failed after Strava redirect.");
       }
     };
 
@@ -365,6 +370,12 @@ export default function App() {
   };
 
   const handlePlanGenerated = async (newPlan: TrainingPlan, newEvents: CalendarEvent[]) => {
+    if (isDemoMode) {
+      setPlans(prev => [newPlan, ...prev]);
+      setEvents(prev => [...newEvents, ...prev]);
+      setActiveTab('calendar');
+      return;
+    }
     if (!user) return;
     
     // Archive old plans
@@ -440,30 +451,30 @@ export default function App() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-zinc-50">
-        <Loader2 className="w-8 h-8 text-emerald-500 animate-spin" />
+      <div className="min-h-screen flex items-center justify-center bg-[#121212]">
+        <Loader2 className="w-8 h-8 text-[#FC4C02] animate-spin" />
       </div>
     );
   }
 
   if (!user) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-zinc-50 p-6">
-        <div className="max-w-md w-full bg-white rounded-3xl shadow-xl p-8 border border-zinc-100 text-center">
-          <div className="w-20 h-20 bg-emerald-500 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-lg shadow-emerald-200">
-            <ActivityIcon className="w-10 h-10 text-white" />
+      <div className="min-h-screen flex items-center justify-center bg-[#121212] p-6">
+        <div className="max-w-md w-full bg-[#1F1F1F] rounded-[2.5rem] shadow-2xl p-10 border border-white/5 text-center animate-kaizen">
+          <div className="w-24 h-24 bg-[#FC4C02] rounded-3xl flex items-center justify-center mx-auto mb-8 shadow-2xl shadow-orange-500/20 rotate-3">
+            <ActivityIcon className="w-12 h-12 text-white -rotate-3" />
           </div>
-          <h1 className="text-3xl font-bold text-zinc-900 mb-2">Veloce AI</h1>
-          <p className="text-zinc-500 mb-8">Your AI-powered athletic journey starts here. Sync with Strava, get personalized plans, and conquer your goals.</p>
+          <h1 className="text-4xl font-black text-white mb-3 tracking-tighter">VELOCE AI</h1>
+          <p className="text-zinc-400 mb-10 text-lg leading-relaxed font-medium">Your high-performance athletic journey starts here. Sync with Strava, get personalized plans, and conquer your goals with Kaizen precision.</p>
           <button
             onClick={loginWithStrava}
-            className="w-full bg-[#FC6100] hover:bg-[#E35700] text-white font-bold py-4 rounded-2xl transition-all shadow-lg flex items-center justify-center gap-3"
+            className="strava-btn-primary w-full text-lg py-5"
           >
-            <ActivityIcon className="w-5 h-5" />
+            <ActivityIcon className="w-6 h-6" />
             Connect with Strava
           </button>
-          <p className="mt-4 text-xs text-zinc-400">
-            Note: Requires Email/Password authentication to be enabled in your Firebase Console.
+          <p className="mt-6 text-xs text-zinc-600 uppercase tracking-widest font-bold">
+            Powered by Strava & Gemini 1.5
           </p>
         </div>
       </div>
@@ -473,56 +484,56 @@ export default function App() {
   const currentActivePlan = plans.find(p => p.status === 'active') || null;
 
   return (
-    <div className="min-h-screen bg-zinc-50 flex">
+    <div className="min-h-screen bg-[#121212] flex text-white">
       {/* Sidebar */}
-      <aside className={`${isSidebarCollapsed ? 'w-20' : 'w-64'} bg-white border-r border-zinc-200 flex flex-col fixed h-full transition-all duration-300 z-40 group`}>
-        <div className={`p-6 flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-3'}`}>
-          <div className="w-10 h-10 bg-emerald-500 rounded-xl flex items-center justify-center shadow-lg shadow-emerald-200 flex-shrink-0">
-            <ActivityIcon className="w-6 h-6 text-white" />
+      <aside className={`${isSidebarCollapsed ? 'w-20' : 'w-72'} bg-[#1F1F1F] border-r border-white/5 flex flex-col fixed h-full transition-all duration-300 z-40 group shadow-2xl shadow-black`}>
+        <div className={`p-8 flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4'}`}>
+          <div className="w-12 h-12 bg-[#FC4C02] rounded-2xl flex items-center justify-center shadow-2xl shadow-orange-500/20 flex-shrink-0">
+            <ActivityIcon className="w-7 h-7 text-white" />
           </div>
-          {!isSidebarCollapsed && <span className="text-xl font-bold text-zinc-900 truncate">Veloce AI</span>}
+          {!isSidebarCollapsed && <span className="text-2xl font-black tracking-tighter text-white">VELOCE</span>}
         </div>
 
-        <nav className="flex-1 px-4 space-y-2 mt-4">
+        <nav className="flex-1 px-4 space-y-3 mt-6">
           <button
             onClick={() => setActiveTab('chat')}
             title="AI Coach"
-            className={`w-full flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-3 px-4'} py-3 rounded-xl font-medium transition-all ${
-              activeTab === 'chat' ? 'bg-emerald-50 text-emerald-600' : 'text-zinc-500 hover:bg-zinc-50'
+            className={`w-full flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4 px-5'} py-4 rounded-2xl font-bold transition-all duration-300 ${
+              activeTab === 'chat' ? 'bg-[#FC4C02] text-white shadow-lg shadow-orange-500/20 scale-[1.02]' : 'text-zinc-500 hover:bg-white/5 hover:text-white'
             }`}
           >
-            <MessageSquare className="w-5 h-5 flex-shrink-0" />
-            {!isSidebarCollapsed && <span className="truncate">AI Coach</span>}
+            <MessageSquare className="w-6 h-6 flex-shrink-0" />
+            {!isSidebarCollapsed && <span className="truncate tracking-tight">AI Coach</span>}
           </button>
           <button
             onClick={() => setActiveTab('calendar')}
             title="Training Plan"
-            className={`w-full flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-3 px-4'} py-3 rounded-xl font-medium transition-all ${
-              activeTab === 'calendar' ? 'bg-emerald-50 text-emerald-600' : 'text-zinc-500 hover:bg-zinc-50'
+            className={`w-full flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4 px-5'} py-4 rounded-2xl font-bold transition-all duration-300 ${
+              activeTab === 'calendar' ? 'bg-[#FC4C02] text-white shadow-lg shadow-orange-500/20 scale-[1.02]' : 'text-zinc-500 hover:bg-white/5 hover:text-white'
             }`}
           >
-            <CalendarIcon className="w-5 h-5 flex-shrink-0" />
-            {!isSidebarCollapsed && <span className="truncate">Training Plan</span>}
+            <CalendarIcon className="w-6 h-6 flex-shrink-0" />
+            {!isSidebarCollapsed && <span className="truncate tracking-tight">Training Plan</span>}
           </button>
           <button
             onClick={() => setActiveTab('dashboard')}
             title="Performance"
-            className={`w-full flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-3 px-4'} py-3 rounded-xl font-medium transition-all ${
-              activeTab === 'dashboard' ? 'bg-emerald-50 text-emerald-600' : 'text-zinc-500 hover:bg-zinc-50'
+            className={`w-full flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4 px-5'} py-4 rounded-2xl font-bold transition-all duration-300 ${
+              activeTab === 'dashboard' ? 'bg-[#FC4C02] text-white shadow-lg shadow-orange-500/20 scale-[1.02]' : 'text-zinc-500 hover:bg-white/5 hover:text-white'
             }`}
           >
-            <BarChart3 className="w-5 h-5 flex-shrink-0" />
-            {!isSidebarCollapsed && <span className="truncate">Performance</span>}
+            <BarChart3 className="w-6 h-6 flex-shrink-0" />
+            {!isSidebarCollapsed && <span className="truncate tracking-tight">Performance</span>}
           </button>
           <button
             onClick={() => setActiveTab('settings')}
             title="Settings"
-            className={`w-full flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-3 px-4'} py-3 rounded-xl font-medium transition-all ${
-              activeTab === 'settings' ? 'bg-emerald-50 text-emerald-600' : 'text-zinc-500 hover:bg-zinc-50'
+            className={`w-full flex items-center ${isSidebarCollapsed ? 'justify-center' : 'gap-4 px-5'} py-4 rounded-2xl font-bold transition-all duration-300 ${
+              activeTab === 'settings' ? 'bg-[#FC4C02] text-white shadow-lg shadow-orange-500/20 scale-[1.02]' : 'text-zinc-500 hover:bg-white/5 hover:text-white'
             }`}
           >
-            <Settings className="w-5 h-5 flex-shrink-0" />
-            {!isSidebarCollapsed && <span className="truncate">Settings</span>}
+            <Settings className="w-6 h-6 flex-shrink-0" />
+            {!isSidebarCollapsed && <span className="truncate tracking-tight">Settings</span>}
           </button>
         </nav>
 
@@ -558,20 +569,20 @@ export default function App() {
       </aside>
 
       {/* Main Content */}
-      <main className={`flex-1 ${isSidebarCollapsed ? 'ml-20' : 'ml-64'} p-8 transition-all duration-300`}>
-        <div className="max-w-6xl mx-auto">
+      <main className={`flex-1 ${isSidebarCollapsed ? 'ml-20' : 'ml-72'} p-10 transition-all duration-300`}>
+        <div className="max-w-6xl mx-auto animate-kaizen">
           {activeTab === 'chat' && (
-            <div className="space-y-8">
+            <div className="space-y-10">
               <header className="flex items-end justify-between">
-                <div className="flex items-end gap-4">
+                <div className="flex items-end gap-6">
                   <div>
-                    <h1 className="text-3xl font-bold text-zinc-900">AI Coach</h1>
-                    <p className="text-zinc-500">Your personal endurance training partner.</p>
+                    <h1 className="text-4xl font-black tracking-tighter text-white">COACH COMMAND</h1>
+                    <p className="text-zinc-500 font-medium">Kaizen protocol active. Optimizing performance.</p>
                   </div>
                   {activities.length > 0 && (
-                    <div className="mb-1 flex items-center gap-1.5 px-3 py-1 bg-emerald-50 text-emerald-600 rounded-full text-[10px] font-bold border border-emerald-100 shadow-sm">
-                      <CheckCircle2 className="w-3 h-3" />
-                      Connected
+                    <div className="mb-1 flex items-center gap-2 px-4 py-1.5 bg-[#FC4C02]/10 text-[#FC4C02] rounded-full text-xs font-bold border border-[#FC4C02]/20 shadow-lg shadow-orange-500/5">
+                      <div className="w-2 h-2 bg-[#FC4C02] rounded-full animate-pulse" />
+                      LIVE DATA ACTIVE
                     </div>
                   )}
                 </div>
@@ -605,16 +616,17 @@ export default function App() {
                 activities={activities} 
                 currentPlan={currentActivePlan}
                 onPlanGenerated={handlePlanGenerated}
+                isDemoMode={isDemoMode}
               />
             </div>
           )}
 
           {activeTab === 'calendar' && (
-            <div className="space-y-8">
+            <div className="space-y-10">
               <header className="flex items-center justify-between">
                 <div>
-                  <h1 className="text-3xl font-bold text-zinc-900">Training Calendar</h1>
-                  <p className="text-zinc-500">Track your execution and follow your plan.</p>
+                  <h1 className="text-4xl font-black tracking-tighter text-white">TRAINING OPS</h1>
+                  <p className="text-zinc-500 font-medium">Protocol execution and historical load tracking.</p>
                 </div>
               </header>
               <Calendar 
@@ -623,49 +635,47 @@ export default function App() {
                 onUpdateExecution={updateExecution}
                 onAddEvent={addEvent}
                 onViewChange={(view) => setIsSidebarCollapsed(view === 'month')}
+                isDemoMode={isDemoMode}
               />
             </div>
           )}
 
           {activeTab === 'dashboard' && (
-            <div className="space-y-8">
+            <div className="space-y-10">
               <header>
-                <h1 className="text-3xl font-bold text-zinc-900">Performance Dashboard</h1>
-                <p className="text-zinc-500">Data-driven insights from your training history.</p>
+                <h1 className="text-4xl font-black tracking-tighter text-white">PERFORMANCE HUBS</h1>
+                <p className="text-zinc-500 font-medium">Data-driven insights from your Kaizen journey.</p>
               </header>
               <PerformanceDashboard userProfile={profile} activities={activities} />
             </div>
           )}
 
           {activeTab === 'settings' && (
-            <div className="max-w-3xl mx-auto space-y-8">
+            <div className="max-w-3xl mx-auto space-y-10">
               <header>
-                <h1 className="text-3xl font-bold text-zinc-900">Settings</h1>
-                <p className="text-zinc-500">Manage your profile and preferences.</p>
+                <h1 className="text-4xl font-black tracking-tighter text-white">SETTING</h1>
+                <p className="text-zinc-500 font-medium">Manage your profile and protocol metrics.</p>
               </header>
 
               {stravaConfig && !stravaConfig.isConfigured && (
-                <div className="bg-amber-50 border border-amber-100 p-6 rounded-3xl space-y-3">
-                  <div className="flex items-center gap-3 text-amber-800 font-bold">
-                    <AlertCircle className="w-5 h-5" />
-                    Strava Integration Not Fully Configured
+                <div className="bg-amber-500/10 border border-amber-500/20 p-8 rounded-[2rem] space-y-4">
+                  <div className="flex items-center gap-3 text-amber-500 font-bold">
+                    <AlertCircle className="w-6 h-6" />
+                    SYSTEM CONFIGURATION INCOMPLETE
                   </div>
-                  <p className="text-sm text-amber-700">
+                  <p className="text-sm text-amber-500/80">
                     The following environment variables are missing in AI Studio: 
                     <span className="font-mono font-bold ml-1">{stravaConfig.missing.join(', ')}</span>.
-                  </p>
-                  <p className="text-xs text-amber-600">
-                    Please add these to the Secrets panel in AI Studio and restart the dev server.
                   </p>
                 </div>
               )}
 
-              <div className="bg-white rounded-3xl border border-zinc-100 shadow-sm divide-y divide-zinc-100">
-                <div className="p-8">
-                  <h3 className="text-lg font-bold text-zinc-900 mb-6">Profile Information</h3>
-                  <div className="space-y-6">
+              <div className="bg-[#1F1F1F] rounded-[2rem] border border-white/5 shadow-2xl overflow-hidden divide-y divide-white/5">
+                <div className="p-10">
+                  <h3 className="text-xl font-black tracking-tight text-white mb-8">PROFILE PROTOCOL</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                     <div>
-                      <label className="block text-sm font-bold text-zinc-700 mb-2">Fitness Level</label>
+                      <label className="block text-xs font-black text-zinc-500 uppercase tracking-widest mb-3">Fitness Level</label>
                       <select 
                         value={profile?.fitnessLevel}
                         onChange={async (e) => {
@@ -673,7 +683,7 @@ export default function App() {
                           await updateDoc(doc(db, 'users', user.uid), { fitnessLevel: val });
                           setProfile({ ...profile!, fitnessLevel: val });
                         }}
-                        className="w-full bg-zinc-50 border border-zinc-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-emerald-500 outline-none transition-all"
+                        className="w-full bg-[#121212] border border-white/10 rounded-xl px-5 py-4 focus:ring-2 focus:ring-[#FC4C02] outline-none transition-all text-white font-bold"
                       >
                         <option value="beginner">Beginner</option>
                         <option value="intermediate">Intermediate</option>
@@ -681,101 +691,62 @@ export default function App() {
                       </select>
                     </div>
                     <div>
-                      <label className="block text-sm font-bold text-zinc-700 mb-2">Training Goals</label>
-                      <textarea 
-                        value={profile?.goals}
-                        onChange={async (e) => {
-                          const val = e.target.value;
-                          setProfile({ ...profile!, goals: val });
-                        }}
-                        onBlur={async (e) => {
-                          await updateDoc(doc(db, 'users', user.uid), { goals: e.target.value });
-                        }}
-                        placeholder="e.g. Run a sub-4 hour marathon, improve cycling power..."
-                        className="w-full bg-zinc-50 border border-zinc-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-emerald-500 outline-none transition-all h-32 resize-none"
-                      />
+                      <label className="block text-xs font-black text-zinc-500 uppercase tracking-widest mb-3">Athlete PRs</label>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="bg-[#121212] p-3 rounded-xl border border-white/5">
+                          <p className="text-[10px] text-zinc-500 font-bold uppercase">Runs</p>
+                          <p className="text-lg font-black text-white">{profile?.personalRecords?.all_run_totals?.count || 0}</p>
+                        </div>
+                        <div className="bg-[#121212] p-3 rounded-xl border border-white/5">
+                          <p className="text-[10px] text-zinc-500 font-bold uppercase">Rides</p>
+                          <p className="text-lg font-black text-white">{(profile?.personalRecords?.biggest_ride_distance || 0 / 1000).toFixed(0)}km</p>
+                        </div>
+                      </div>
                     </div>
+                  </div>
+                  <div className="mt-8">
+                    <label className="block text-xs font-black text-zinc-500 uppercase tracking-widest mb-3">Core Training Goals</label>
+                    <textarea 
+                      value={profile?.goals}
+                      onChange={async (e) => {
+                        const val = e.target.value;
+                        setProfile({ ...profile!, goals: val });
+                      }}
+                      onBlur={async (e) => {
+                        await updateDoc(doc(db, 'users', user.uid), { goals: e.target.value });
+                      }}
+                      placeholder="e.g. Sub-4 marathon, ironman foundation..."
+                      className="w-full bg-[#121212] border border-white/10 rounded-xl px-5 py-4 focus:ring-2 focus:ring-[#FC4C02] outline-none transition-all h-32 resize-none text-white font-medium"
+                    />
                   </div>
                 </div>
 
-                <div className="p-8">
-                  <h3 className="text-lg font-bold text-zinc-900 mb-6">Integrations</h3>
+                <div className="p-10">
+                  <h3 className="text-xl font-black tracking-tight text-white mb-8">INTEGRATIONS</h3>
                   <StravaConnect 
                     userProfile={profile} 
                     onConnect={handleStravaConnect} 
                     hasData={activities.length > 0} 
                   />
-                  
-                  <div className="mt-8 pt-8 border-t border-zinc-100">
-                    <h4 className="text-sm font-bold text-zinc-900 mb-4">Manual Token Entry (Advanced)</h4>
-                    <div className="space-y-4">
-                      <div>
-                        <label className="block text-xs font-bold text-zinc-500 mb-1">Access Token</label>
-                        <input 
-                          type="text"
-                          placeholder="Paste access token..."
-                          className="w-full bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
-                          onBlur={async (e) => {
-                            if (!e.target.value) return;
-                            const updatedProfile = { ...profile!, stravaAccessToken: e.target.value };
-                            await updateDoc(doc(db, 'users', user.uid), { stravaAccessToken: e.target.value });
-                            setProfile(updatedProfile);
-                          }}
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-zinc-500 mb-1">Refresh Token</label>
-                        <input 
-                          type="text"
-                          placeholder="Paste refresh token..."
-                          className="w-full bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
-                          onBlur={async (e) => {
-                            if (!e.target.value) return;
-                            const updatedProfile = { ...profile!, stravaRefreshToken: e.target.value };
-                            await updateDoc(doc(db, 'users', user.uid), { stravaRefreshToken: e.target.value });
-                            setProfile(updatedProfile);
-                          }}
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-zinc-500 mb-1">Athlete ID (Optional)</label>
-                        <input 
-                          type="text"
-                          placeholder="Paste athlete ID..."
-                          className="w-full bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
-                          onBlur={async (e) => {
-                            if (!e.target.value) return;
-                            const updatedProfile = { ...profile!, stravaAthleteId: e.target.value };
-                            await updateDoc(doc(db, 'users', user.uid), { stravaAthleteId: e.target.value });
-                            setProfile(updatedProfile);
-                          }}
-                        />
-                      </div>
-                      <button 
-                        onClick={() => profile && syncStravaActivities(profile)}
-                        className="text-xs font-bold text-emerald-600 hover:text-emerald-700"
-                      >
-                        Sync with Manual Tokens
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="p-8">
-                  <h3 className="text-lg font-bold text-zinc-900 mb-4 text-rose-600">Danger Zone</h3>
-                  <p className="text-sm text-zinc-500 mb-6">Once you delete your account, there is no going back. Please be certain.</p>
-                  <button 
-                    onClick={deleteAccount}
-                    className="bg-rose-50 text-rose-600 hover:bg-rose-100 px-6 py-3 rounded-2xl font-bold transition-all"
-                  >
-                    Delete Account
-                  </button>
                 </div>
               </div>
             </div>
           )}
         </div>
       </main>
+
+      {/* Demo Mode Toggle */}
+      <button
+        onClick={() => setIsDemoMode(!isDemoMode)}
+        className={`fixed bottom-10 right-10 z-50 flex items-center gap-3 px-8 py-5 rounded-2xl font-black shadow-2xl transition-all duration-300 ${
+          isDemoMode 
+            ? 'bg-[#D21C38] text-white hover:bg-[#B0172E] scale-105' 
+            : 'bg-[#FC4C02] text-white hover:bg-[#E34402] hover:scale-105'
+        } shadow-black`}
+      >
+        <Sparkles className={`w-6 h-6 ${isDemoMode ? 'animate-pulse' : ''}`} />
+        <span className="tracking-tighter text-lg">{isDemoMode ? 'DEACTIVATE DEMO' : 'ACTIVATE DEMO'}</span>
+      </button>
     </div>
   );
 }
