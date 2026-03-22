@@ -1,0 +1,5 @@
+{
+  "name": "Veloce AI",
+  "description": "AI-powered fitness coach that syncs with Strava to create personalized training plans and manage your athletic calendar.",
+  "requestFramePermissions": []
+}

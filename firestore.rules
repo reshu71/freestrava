@@ -1,0 +1,100 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    // Collection: users
+    // Document ID: uid
+    // Fields: uid, displayName, email, stravaAccessToken, stravaRefreshToken, stravaTokenExpiresAt, stravaAthleteId, fitnessLevel, goals
+    //
+    // Collection: activities
+    // Document ID: activityId
+    // Fields: stravaId, userId, name, type, distance, movingTime, startDate, averageHeartrate, maxHeartrate
+    //
+    // Collection: plans
+    // Document ID: planId
+    // Fields: userId, title, description, startDate, endDate, status
+    //
+    // Collection: events
+    // Document ID: eventId
+    // Fields: userId, planId, title, description, date, duration, intensity, completed
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "rakshit.kumar71@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function isValidUser(data) {
+      return data.uid is string &&
+             data.email is string &&
+             (!('fitnessLevel' in data) || data.fitnessLevel in ['beginner', 'intermediate', 'advanced']);
+    }
+
+    function isValidActivity(data) {
+      return data.stravaId is string &&
+             data.userId is string &&
+             data.name is string &&
+             data.startDate is string;
+    }
+
+    function isValidPlan(data) {
+      return data.userId is string &&
+             data.title is string &&
+             data.startDate is string;
+    }
+
+    function isValidEvent(data) {
+      return data.userId is string &&
+             data.title is string &&
+             data.date is string;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+    match /users/{uid} {
+      allow read: if isOwner(uid) || isAdmin();
+      allow create: if isOwner(uid) && isValidUser(request.resource.data);
+      allow update: if isOwner(uid) && isValidUser(request.resource.data);
+    }
+
+    match /activities/{activityId} {
+      allow read: if isOwner(resource.data.userId) || isAdmin();
+      allow create: if isOwner(request.resource.data.userId) && isValidActivity(request.resource.data);
+      allow update: if isOwner(resource.data.userId) && isValidActivity(request.resource.data);
+      allow delete: if isOwner(resource.data.userId) || isAdmin();
+    }
+
+    match /plans/{planId} {
+      allow read: if isOwner(resource.data.userId) || isAdmin();
+      allow create: if isOwner(request.resource.data.userId) && isValidPlan(request.resource.data);
+      allow update: if isOwner(resource.data.userId) && isValidPlan(request.resource.data);
+      allow delete: if isOwner(resource.data.userId) || isAdmin();
+    }
+
+    match /events/{eventId} {
+      allow read: if isOwner(resource.data.userId) || isAdmin();
+      allow create: if isOwner(request.resource.data.userId) && isValidEvent(request.resource.data);
+      allow update: if isOwner(resource.data.userId) && isValidEvent(request.resource.data);
+      allow delete: if isOwner(resource.data.userId) || isAdmin();
+    }
+  }
+}
